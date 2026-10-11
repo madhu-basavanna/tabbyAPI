@@ -17,6 +17,7 @@ from common.logger import xlogger
 import re
 
 from common import model
+from common.mlflow_tracing import current_span, request_tag_attributes, trace
 from common.multimodal import MultimodalEmbeddingWrapper
 from common.networking import (
     get_context_length_generator_error,
@@ -850,6 +851,7 @@ async def _chat_stream_collector(
             return e
 
 
+@trace("chat.completions.stream", "CHAIN")
 async def stream_generate_chat_completion(
     prompt: str,
     embeddings: MultimodalEmbeddingWrapper,
@@ -867,6 +869,18 @@ async def stream_generate_chat_completion(
     return_usage = data.stream_options and data.stream_options.include_usage
 
     try:
+        span = current_span()
+        span.set_inputs(
+            {
+                "model": data.model,
+                "messages": data.messages,
+                "tools": data.tools,
+                "stream": data.stream,
+                "n": data.n,
+            }
+        )
+        span.set_attributes({**request_tag_attributes(request), "model_dir": str(model_path)})
+
         xlogger.debug(
             f"{request_tag(request)} chat completion (stream) payload, ID {request.state.id}",
             {
@@ -958,6 +972,10 @@ async def stream_generate_chat_completion(
             # Check if all tasks are completed
             if all(task.done() for task in gen_tasks) and gen_queue.empty():
                 xlogger.debug(f"{request_tag(request)} chat completion stream finished")
+                if return_usage and usage_stats_list:
+                    span.set_outputs(
+                        {"usage": aggregate_usage_stats(usage_stats_list).model_dump(mode="json")}
+                    )
                 yield "[DONE]"
                 break
 
@@ -978,6 +996,7 @@ async def stream_generate_chat_completion(
         await disconnect_handler.cleanup()
 
 
+@trace("chat.completions", "CHAIN")
 async def generate_chat_completion(
     prompt: str,
     embeddings: MultimodalEmbeddingWrapper,
@@ -990,6 +1009,18 @@ async def generate_chat_completion(
     return_usage = True  # non-streaming responses always carry usage
 
     try:
+        span = current_span()
+        span.set_inputs(
+            {
+                "model": data.model,
+                "messages": data.messages,
+                "tools": data.tools,
+                "stream": data.stream,
+                "n": data.n,
+            }
+        )
+        span.set_attributes({**request_tag_attributes(request), "model_dir": str(model_path)})
+
         xlogger.debug(
             f"{request_tag(request)} chat completion payload, ID {request.state.id}",
             {
@@ -1033,6 +1064,9 @@ async def generate_chat_completion(
                 raise r
             generations.append(r)
         response = _compose_response(request.state.id, generations, model_path.name, return_usage)
+
+        # Record the full response (content, reasoning, tool calls, usage) on the span
+        span.set_outputs(response.model_dump(mode="json", exclude_none=True))
 
         xlogger.debug(f"{request_tag(request)} chat completion finished", {"response": response})
         return response

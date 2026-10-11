@@ -11,7 +11,7 @@ import signal
 from loguru import logger
 from typing import Optional
 
-from common import gen_logging, sampling
+from common import gen_logging, mlflow_tracing, sampling
 from common.args import convert_args_to_dict, init_argparser
 from common.auth import load_auth_keys
 from common.actions import run_subcommand
@@ -168,6 +168,9 @@ def entrypoint(
     # load config
     config.load(dict_args)
     set_console_timestamps(config.logging.log_timestamps)
+
+    # Optionally enable MLflow tracing (no-op unless monitoring.mlflow is set)
+    mlflow_tracing.setup()
 
     # optionally enable seqlog logging
     if config.developer.seqlog:

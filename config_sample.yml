@@ -78,6 +78,26 @@ logging:
   # and user-provided content are preserved for bug-report reproduction.
   log_chat_completion_requests: false
 
+# Options for server-side observability
+monitoring:
+  # Enable MLflow tracing of generations and tool calls (default: False).
+  # Requires the optional `mlflow` package; install it with `pip install 'mlflow>=3.0'`.
+  # When disabled the tracing code is a no-op, so this costs nothing.
+  # When enabled, every generation request becomes one MLflow trace containing:
+  #   - a span for the API request (full request payload + response)
+  #   - a span for the Exllama generation step (prompt tokens, cache reuse,
+  #     prefill/decode times, tokens/sec, speculative-decoding accept/reject,
+  #     finish reason)
+  #   - one span per parsed tool call (tool name + arguments)
+  mlflow: false
+
+  # MLflow tracking backend (default: sqlite:///mlflow.db).
+  # A local SQLite file, or a hosted MLflow server such as http://localhost:5000.
+  mlflow_tracking_uri: sqlite:///mlflow.db
+
+  # Name of the MLflow experiment traces are written to (default: tabbyapi).
+  mlflow_experiment: tabbyapi
+
 # Options for model overrides and loading
 # Please read the comments to understand how arguments are handled
 # between initial and API loads

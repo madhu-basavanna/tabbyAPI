@@ -159,6 +159,39 @@ class LoggingConfig(BaseConfigModel):
     )
 
 
+class MonitoringConfig(BaseConfigModel):
+    """
+    Options for server-side observability.
+
+    Enables MLflow tracing of what happens inside the server: one trace per
+    generation request, with a span for the Exllama generation step (prompt
+    tokens, cache reuse, prefill/decode times, tokens/sec, speculative-decoding
+    accept/reject, finish reason) and a span per parsed tool call (name and
+    arguments). Requires the optional `mlflow` package (pip install 'mlflow>=3.0').
+    """
+
+    mlflow: Optional[bool] = Field(
+        False,
+        description=(
+            "Enable MLflow tracing of generations and tool calls (default: False).\n"
+            "Requires the optional `mlflow` package; install it with\n"
+            "`pip install 'mlflow>=3.0'`. When disabled the tracing code is a no-op."
+        ),
+    )
+    mlflow_tracking_uri: Optional[str] = Field(
+        "sqlite:///mlflow.db",
+        description=(
+            "MLflow tracking backend (default: sqlite:///mlflow.db).\n"
+            "A local SQLite file, or a hosted MLflow server such as\n"
+            "http://localhost:5000."
+        ),
+    )
+    mlflow_experiment: Optional[str] = Field(
+        "tabbyapi",
+        description="Name of the MLflow experiment traces are written to (default: tabbyapi).",
+    )
+
+
 class ModelConfig(BaseConfigModel):
     """
     Options for model overrides and loading
@@ -843,6 +876,9 @@ class TabbyConfigModel(BaseModel):
     )
     logging: Optional[LoggingConfig] = Field(
         default_factory=LoggingConfig.model_construct,
+    )
+    monitoring: Optional[MonitoringConfig] = Field(
+        default_factory=MonitoringConfig.model_construct,
     )
     model: Optional[ModelConfig] = Field(
         default_factory=ModelConfig.model_construct,

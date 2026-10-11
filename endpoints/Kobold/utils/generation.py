@@ -5,6 +5,7 @@ from loguru import logger
 from sse_starlette.event import ServerSentEvent
 
 from common import model
+from common.mlflow_tracing import current_span, request_tag_attributes, trace
 from common.errors import (
     ContextLengthExceededError,
     ContextLengthHTTPException,
@@ -59,6 +60,10 @@ async def _stream_collector(data: GenerateRequest, request: Request):
     try:
         logger.debug(f"Received Kobold generation request {data.genkey}")
 
+        span = current_span()
+        span.set_inputs({"prompt": data.prompt, "genkey": data.genkey})
+        span.set_attributes({**request_tag_attributes(request), "endpoint": "kobold/generate"})
+
         generator = model.container.stream_generate(
             request_id=data.genkey,
             prompt=data.prompt,
@@ -82,6 +87,7 @@ async def _stream_collector(data: GenerateRequest, request: Request):
 
             if "finish_reason" in generation:
                 logger.debug(f"Finished streaming Kobold request {data.genkey}")
+                span.set_outputs({"text": generation_cache[data.genkey]["text"]})
                 break
     except CancelledError:
         # If the request disconnects, break out
@@ -93,6 +99,7 @@ async def _stream_collector(data: GenerateRequest, request: Request):
         del generation_cache[data.genkey]
 
 
+@trace("kobold.generate.stream", "CHAIN")
 async def stream_generation(data: GenerateRequest, request: Request):
     """Wrapper for stream generations."""
 
@@ -114,6 +121,7 @@ async def stream_generation(data: GenerateRequest, request: Request):
         )
 
 
+@trace("kobold.generate", "CHAIN")
 async def get_generation(data: GenerateRequest, request: Request):
     """Wrapper to get a static generation."""
 

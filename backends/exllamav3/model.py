@@ -42,6 +42,7 @@ from common.hardware import hardware_supports_exllamav3, torch_gpu_problem
 from common.health import HealthManager
 from common.errors import ContextLengthExceededError, validate_context_requirements
 from common.logger import xlogger
+from common.mlflow_tracing import current_span, record_metrics, trace
 from common.model_meta import read_model_meta
 from common.multimodal import MultimodalEmbeddingWrapper
 from common.networking import DisconnectHandler
@@ -1368,6 +1369,7 @@ class ExllamaV3Container:
 
         return joined_generation
 
+    @trace("exllama.generate", "LLM")
     async def stream_generate(
         self,
         request_id: str,
@@ -1398,6 +1400,10 @@ class ExllamaV3Container:
         Yields:
             Generation chunks
         """
+
+        span = current_span()
+        span.set_inputs({"request_id": request_id, "prompt": prompt})
+        span.set_attributes({"label": label, "model": self.model_dir.name})
 
         try:
             # Wait for load lock to be freed before processing
@@ -2054,6 +2060,15 @@ class ExllamaV3Container:
 
                     # Save the final result for metrics logging
                     metrics_result = finish_chunk
+
+                    # Record the generation metrics on the MLflow span. full_text
+                    # is large and already captured in the span outputs, so drop it
+                    # from the attributes.
+                    gen_metrics = {k: v for k, v in finish_chunk.items() if k != "full_text"}
+                    record_metrics(span, gen_metrics)
+                    span.set_outputs(
+                        {"text": full_response, "finish_reason": finish_chunk.get("finish_reason")}
+                    )
 
                     yield finish_chunk
                     break

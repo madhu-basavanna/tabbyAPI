@@ -15,3 +15,5 @@ Are you a developer? Take a look at the [Usage](https://github.com/theroyallab/t
 Have issues? Check out the [FAQ](https://github.com/theroyallab/tabbyAPI/wiki/05.-FAQ) page.
 
 Running an AMD GPU? See the [ROCm](https://github.com/theroyallab/tabbyAPI/wiki/11.-ROCm) page.
+
+Want to observe generations and tool calls? See [Monitoring with MLflow](https://github.com/theroyallab/tabbyAPI/wiki/12.-Monitoring).

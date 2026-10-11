@@ -57,6 +57,11 @@ extras = [
     # bound it upstream. See issue #414.
     "huggingface_hub < 1.0",
 ]
+monitoring = [
+    # Optional MLflow tracing of generations and tool calls
+    # (enabled via the `monitoring` section of config.yml)
+    "mlflow >= 3.0",
+]
 dev = [
     "ruff == 0.11.10"
 ]

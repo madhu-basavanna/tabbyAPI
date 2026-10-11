@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
 from common.logger import xlogger
+from common.mlflow_tracing import current_span, trace
 
 from endpoints.OAI.types.tools import ToolCall
 from endpoints.OAI.utils.toolcall_formats import (
@@ -232,6 +233,7 @@ def detect_reasoning_tags(
     return None, None
 
 
+@trace("parse.toolcalls", "CHAIN")
 def parse_toolcalls(tool_calls_str: str, tool_format: str) -> List[ToolCall]:
     """
     Dispatch tool call parsing to the appropriate format handler.
@@ -244,12 +246,22 @@ def parse_toolcalls(tool_calls_str: str, tool_format: str) -> List[ToolCall]:
         List of parsed ToolCall objects. Empty list on parse failure (never raises).
     """
 
+    span = current_span()
+    span.set_inputs({"tool_calls_str": tool_calls_str, "tool_format": tool_format})
+
     try:
         parser = _get_parser(tool_format)
         if not parser:
+            span.set_outputs({"tool_calls": []})
             return []
 
-        return parser.parse_toolcalls(tool_calls_str)
+        parsed = parser.parse_toolcalls(tool_calls_str)
+
+        # Record each parsed tool call (name + arguments) on the span
+        names = [getattr(tc, "name", None) for tc in parsed]
+        span.set_outputs({"tool_calls": [tc.model_dump(mode="json") for tc in parsed]})
+        span.set_attributes({"tool_call_count": len(parsed), "tool_names": names})
+        return parsed
 
     except Exception as e:
         xlogger.error(
@@ -257,4 +269,5 @@ def parse_toolcalls(tool_calls_str: str, tool_format: str) -> List[ToolCall]:
             {"tool_format": tool_format, "e": str(e)},
             details=f"(format={tool_format}): {e}",
         )
+        span.set_outputs({"tool_calls": []})
         return []
