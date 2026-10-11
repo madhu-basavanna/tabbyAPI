@@ -55,13 +55,38 @@ def is_setup_done() -> bool:
     return _setup_done
 
 
+def _tracking_server_reachable(tracking_uri: str, timeout: float = 3.0) -> bool:
+    """
+    Fast pre-flight check that an http(s) tracking server is reachable.
+
+    MLflow's client uses generous defaults (120 s timeout, 7 retries), so a
+    misconfigured or unreachable server would otherwise block server startup
+    for many minutes. This check bounds the wait to a few seconds.
+    """
+
+    from urllib.parse import urlparse
+    from urllib.request import urlopen
+
+    parsed = urlparse(tracking_uri)
+    if parsed.scheme not in ("http", "https"):
+        return True  # file-based backends (sqlite, local paths): nothing to check
+
+    target = f"{parsed.scheme}://{parsed.netloc}"
+    try:
+        urlopen(target, timeout=timeout).close()
+        return True
+    except Exception:
+        return False
+
+
 def setup() -> bool:
     """
     Initialize MLflow tracing from the monitoring config.
 
     Idempotent: a second call is a no-op. Returns True when tracing is active.
-    Never raises: a missing mlflow install or a bad tracking URI just leaves
-    tracing disabled so the server still starts.
+    Never raises and never blocks startup: a missing mlflow install, an
+    unreachable tracking server, or a bad tracking URI just leaves tracing
+    disabled so the server still starts.
     """
 
     global _enabled, _setup_done
@@ -85,6 +110,22 @@ def setup() -> bool:
 
     tracking_uri = getattr(section, "mlflow_tracking_uri", None) or "sqlite:///mlflow.db"
     experiment = getattr(section, "mlflow_experiment", None) or "tabbyapi"
+
+    if not _tracking_server_reachable(tracking_uri):
+        xlogger.warning(
+            f"monitoring.mlflow is enabled but the tracking server at {tracking_uri} "
+            "is not reachable. Is the MLflow server running and is the hostname/port "
+            "right (use the tracking base URL, not the browser UI URL)? "
+            "Tracing stays disabled; the server will still start."
+        )
+        return False
+
+    # Bound MLflow's HTTP timeout/retries so a server that becomes unreachable
+    # later can't stall the event loop for minutes.
+    import os
+
+    os.environ.setdefault("MLFLOW_HTTP_REQUEST_TIMEOUT", "30")
+    os.environ.setdefault("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "2")
 
     try:
         mlflow.set_tracking_uri(tracking_uri)
