@@ -1401,9 +1401,11 @@ class ExllamaV3Container:
             Generation chunks
         """
 
-        span = current_span()
-        span.set_inputs({"request_id": request_id, "prompt": prompt})
-        span.set_attributes({"label": label, "model": self.model_dir.name})
+        # NB: named mlflow_span (not `span`) because generate_gen() below has its
+        # own local `span` list used for merging stream results.
+        mlflow_span = current_span()
+        mlflow_span.set_inputs({"request_id": request_id, "prompt": prompt})
+        mlflow_span.set_attributes({"label": label, "model": self.model_dir.name})
 
         try:
             # Wait for load lock to be freed before processing
@@ -2061,12 +2063,15 @@ class ExllamaV3Container:
                     # Save the final result for metrics logging
                     metrics_result = finish_chunk
 
-                    # Record the generation metrics on the MLflow span. full_text
-                    # is large and already captured in the span outputs, so drop it
-                    # from the attributes.
+                    # Record the generation metrics on the MLflow span. This runs
+                    # inside stream_generate's traced context, so current_span()
+                    # resolves to the same exllama.generate span. (full_text is
+                    # large and already captured in the span outputs, so drop it
+                    # from the attributes.)
                     gen_metrics = {k: v for k, v in finish_chunk.items() if k != "full_text"}
-                    record_metrics(span, gen_metrics)
-                    span.set_outputs(
+                    gen_span = current_span()
+                    record_metrics(gen_span, gen_metrics)
+                    gen_span.set_outputs(
                         {"text": full_response, "finish_reason": finish_chunk.get("finish_reason")}
                     )
 
