@@ -61,9 +61,14 @@ def _tracking_server_reachable(tracking_uri: str, timeout: float = 3.0) -> bool:
 
     MLflow's client uses generous defaults (120 s timeout, 7 retries), so a
     misconfigured or unreachable server would otherwise block server startup
-    for many minutes. This check bounds the wait to a few seconds.
+    for many minutes. This check bounds the wait to a few seconds and honors
+    the same TLS settings as the MLflow client (MLFLOW_TRACKING_INSECURE_TLS
+    / MLFLOW_TRACKING_SERVER_CERT_PATH) so self-signed home servers are not
+    falsely reported as unreachable.
     """
 
+    import os
+    import ssl
     from urllib.parse import urlparse
     from urllib.request import urlopen
 
@@ -72,8 +77,22 @@ def _tracking_server_reachable(tracking_uri: str, timeout: float = 3.0) -> bool:
         return True  # file-based backends (sqlite, local paths): nothing to check
 
     target = f"{parsed.scheme}://{parsed.netloc}"
+
+    context = None
+    if parsed.scheme == "https":
+        insecure = os.environ.get("MLFLOW_TRACKING_INSECURE_TLS", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        cert_path = os.environ.get("MLFLOW_TRACKING_SERVER_CERT_PATH")
+        if insecure:
+            context = ssl._create_unverified_context()
+        elif cert_path:
+            context = ssl.create_default_context(cafile=cert_path)
+
     try:
-        urlopen(target, timeout=timeout).close()
+        urlopen(target, timeout=timeout, context=context).close()
         return True
     except Exception:
         return False
