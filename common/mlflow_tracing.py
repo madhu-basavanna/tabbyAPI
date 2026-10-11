@@ -98,6 +98,59 @@ def _tracking_server_reachable(tracking_uri: str, timeout: float = 3.0) -> bool:
         return False
 
 
+def _requests_trusts(tracking_uri: str, timeout: float = 3.0) -> bool:
+    """
+    Check whether `requests` (the library MLflow's client uses) can verify the
+    server's TLS certificate.
+
+    This matters because `requests` trusts the `certifi` bundle (public CAs
+    only) by default, while curl and urllib use the system store. A home
+    server behind Caddy/Tailscale uses a private CA that only the system
+    store knows about, so curl works but the Python client fails with
+    CERTIFICATE_VERIFY_FAILED. Only TLS failures count as "not trusted"; any
+    other error means the handshake succeeded and we shouldn't interfere.
+    """
+
+    import requests
+    from urllib.parse import urlparse
+
+    parsed = urlparse(tracking_uri)
+    if parsed.scheme not in ("http", "https"):
+        return True
+
+    target = f"{parsed.scheme}://{parsed.netloc}"
+    try:
+        requests.get(target, timeout=timeout)
+        return True
+    except requests.exceptions.SSLError:
+        return False
+    except Exception:
+        return True
+
+
+def _system_ca_bundle() -> str | None:
+    """
+    The system CA bundle path (the one curl/urllib use), if it exists.
+    """
+
+    import os
+    import ssl
+
+    paths = ssl.get_default_verify_paths()
+    for candidate in (paths.openssl_cafile, paths.cafile):
+        if candidate and os.path.exists(candidate):
+            return candidate
+    for candidate in (
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+        "/etc/ssl/ca-bundle.pem",
+        "/etc/pki/tls/cacert.pem",
+    ):
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def setup() -> bool:
     """
     Initialize MLflow tracing from the monitoring config.
@@ -142,17 +195,42 @@ def setup() -> bool:
     # Bound MLflow's HTTP timeout/retries so a server that becomes unreachable
     # later can't stall the event loop for minutes.
     import os
+    from urllib.parse import urlparse
 
     os.environ.setdefault("MLFLOW_HTTP_REQUEST_TIMEOUT", "30")
     os.environ.setdefault("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "2")
+
+    # MLflow's client uses `requests`, which trusts the certifi bundle by
+    # default (public CAs only). Home servers behind Caddy/Tailscale use a
+    # private CA that only the system store knows about, so the pre-check
+    # above passes (urllib uses the system store) but MLflow still fails with
+    # CERTIFICATE_VERIFY_FAILED. Detect that and point requests at the system
+    # CA bundle.
+    if urlparse(tracking_uri).scheme == "https" and not _requests_trusts(tracking_uri):
+        bundle = _system_ca_bundle()
+        if bundle:
+            os.environ["REQUESTS_CA_BUNDLE"] = bundle
+            if _requests_trusts(tracking_uri):
+                xlogger.info(
+                    f"MLflow TLS: the server's CA is not in the certifi bundle, so "
+                    f"requests was pointed at the system CA bundle ({bundle})."
+                )
 
     try:
         mlflow.set_tracking_uri(tracking_uri)
         mlflow.set_experiment(experiment)
     except Exception as exc:
+        hint = ""
+        if "CERTIFICATE_VERIFY_FAILED" in str(exc) or "SSLCertVerificationError" in str(exc):
+            hint = (
+                " The server's certificate could not be verified by the Python client "
+                "(requests trusts the certifi bundle, not your system store). Set "
+                "REQUESTS_CA_BUNDLE to a CA bundle that includes the issuer, or "
+                "MLFLOW_TRACKING_INSECURE_TLS=true to skip verification."
+            )
         xlogger.warning(
             f"monitoring.mlflow is enabled but MLflow could not be initialized "
-            f"(tracking_uri={tracking_uri}): {exc}. Tracing stays disabled."
+            f"(tracking_uri={tracking_uri}): {exc}.{hint} Tracing stays disabled."
         )
         return False
 
